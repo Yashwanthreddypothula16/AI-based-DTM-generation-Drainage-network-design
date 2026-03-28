@@ -1,0 +1,25 @@
+# Ignore heavy data files
+*.tif
+*.tiff
+*.bin
+*.las
+*.laz
+*.aux.xml
+
+# Ignore shapefiles (large GIS data)
+*.shp
+*.dbf
+*.shx
+*.prj
+*.cpg
+
+# Ignore 3D / large outputs
+*.gif
+*.html
+
+# Ignore environment
+.venv/
+
+# Ignore cache
+__pycache__/
+*.pyc
