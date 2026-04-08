@@ -24,5 +24,6 @@ This project uses LiDAR data and machine learning to generate Digital Terrain Mo
 
 \## Author
 
-Guna Sekhar Reddy
+Pothula Yashwanth Reddy 
+
 
