@@ -1,0 +1,845 @@
+Found 23 numbered python files:
+
+==================================================
+File: 01_clean_rajasthan_data.py
+  Imports count: 3
+  Imports: ['import laspy', 'import numpy as np', 'import os']
+  Functions: ['clean_point_cloud']
+  Main/Entry code preview:
+    def clean_point_cloud():
+        print("Initializing Noise Removal process for Rajasthan Point Cloud...")
+        
+        # We will use the smaller file first to test the cleaning process
+        input_las = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH.las"
+        output_las = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_cleaned.las"
+        
+        if not os.path.exists(input_las):
+            print(f"Error: Could not find {input_las}")
+            return
+    
+        print("Loading point cloud into memory (this may take a moment)...")
+        las = laspy.read(input_las)
+        
+        total_points = len(las.points)
+        print(f"Original point count: {total_points:,}")
+        
+        # --- NOISE REMOVAL FILTERING ---
+        # Common noise in Drone LiDAR includes extreme high flying points or deep subsurface reflections.
+        # We will remove points beyond 3 standard deviations (Z-axis).
+        
+        z_points = las.z
+        z_mean = np.mean(z_points)
+        z_std = np.std(z_points)
+        
+        print(f"Elevation Statistics -> Mean: {z_mean:.2f}, Std Dev: {z_std:.2f}")
+        
+        # Keep points within 3 std devs (removes ~0.3% of the most extreme outlier points)
+        lower_bound = z_mean - (3 * z_std)
+        upper_bound = z_mean + (3 * z_std)
+
+==================================================
+File: 02_hydrology_network.py
+  Imports count: 2
+  Imports: ['import os', 'from whitebox import WhiteboxTools']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Setting up Hydrological Network Analysis...")
+        wbt = WhiteboxTools()
+        
+        # Set the working directory to the current folder where files are
+        wbt.set_working_dir(os.path.abspath(os.getcwd()))
+        
+        # 1. Fill Pits/Depressions
+        # This is a critical step to ensure continuous flow paths.
+        dtm_input = "dtm.tif"
+        dtm_filled = "dtm_filled.tif"
+        
+        print(f"1. Filling depressions in {dtm_input}...")
+        wbt.fill_depressions(dtm_input, dtm_filled, fix_flats=True)
+        
+        # 2. D8 Pointer (Flow Direction)
+        # Calculates where each drop of water will flow
+        flow_dir = "flow_dir_wbt.tif"
+        print("2. Computing D8 flow direction...")
+        wbt.d8_pointer(dtm_filled, flow_dir)
+        
+        # 3. D8 Flow Accumulation
+        # Simulates how much water flows into each cell based on flow direction
+        flow_acc = "flow_acc_wbt.tif"
+        print("3. Computing D8 flow accumulation...")
+        wbt.d8_flow_accumulation(dtm_filled, flow_acc, out_type="cells")
+        
+        # 4. Extract Streams
+        # Extract only cells with high flow accumulation (e.g., more than 50 cells)
+        threshold = 50
+
+==================================================
+File: 02_ml_classifier.py
+  Imports count: 6
+  Imports: ['import laspy', 'import numpy as np', 'import os', 'from sklearn.ensemble import RandomForestClassifier', 'from scipy.spatial import cKDTree', 'import time']
+  Functions: ['extract_features', 'pseudo_label', 'main']
+  Main/Entry code preview:
+    def main():
+        print("Initializing Random Forest AI/ML Classification Workflow...")
+        
+        input_las = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_cleaned.las"
+        output_las = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_ml_classified.las"
+        
+        if not os.path.exists(input_las):
+            print(f"Error: Could not find {input_las}")
+            return
+    
+        print("Loading point cloud...")
+        start = time.time()
+        las = laspy.read(input_las)
+        
+        coords = np.vstack((las.x, las.y, las.z)).transpose()
+        z_vals = las.z
+        total_points = len(coords)
+        
+        print(f"Loaded {total_points:,} points in {time.time()-start:.1f}s")
+        
+        print("Building cKDTree for spatial querying (this takes memory and time)...")
+        start = time.time()
+        tree = cKDTree(coords)
+        print(f"KDTree built in {time.time()-start:.1f}s")
+        
+        # --- PHASE 1: GENERATE TRAINING DATA ---
+        # We sample 25,000 points to build out the Random Forest model training dataset.
+        print("PHASE 1: Extracting Spatial Features for Training Dataset...")
+        train_size = min(25000, total_points)
+        train_indices = np.random.choice(total_points, train_size, replace=False)
+
+==================================================
+File: 03_generate_dtm.py
+  Imports count: 5
+  Imports: ['import laspy', 'import numpy as np', 'from scipy.interpolate import griddata', 'import rasterio', 'from rasterio.transform import from_origin']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Initializing robust DTM Generation using ML Ground Points...")
+        
+        input_las = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_ml_classified.las"
+        output_dtm = r"Rajasthan_Point_Cloud\rajasthan_dtm.tif"
+        
+        print("Loading point cloud into memory...")
+        las = laspy.read(input_las)
+        
+        # Extract only the ML-Predicted Ground Points (Class 2)
+        ground_mask = las.classification == 2
+        x = las.x[ground_mask]
+        y = las.y[ground_mask]
+        z = las.z[ground_mask]
+        
+        total_ground = len(x)
+        print(f"Isolated {total_ground:,} ML Ground Points.")
+        
+        if total_ground == 0:
+            print("ERROR: No ground points found. Check ML classifier output.")
+            return
+    
+        # To avoid memory crashing during griddata (O(n^2) or high memory requirement), we sample.
+        max_points = 1000000 
+        if total_ground > max_points:
+            indices = np.random.choice(total_ground, max_points, replace=False)
+            x = x[indices]
+            y = y[indices]
+            z = z[indices]
+            print(f"Sampled down to {max_points:,} points for ultra-detailed DTM interpolation.")
+
+==================================================
+File: 03_vectorize_network.py
+  Imports count: 2
+  Imports: ['import os', 'from whitebox import WhiteboxTools']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Vectorizing stream network...")
+        wbt = WhiteboxTools()
+        wbt.set_working_dir(os.path.abspath(os.getcwd()))
+        
+        # Convert stream raster to connected line vectors (Shapefile format)
+        streams_raster = "streams_wbt.tif"
+        flow_dir = "flow_dir_wbt.tif"
+        output_shp = "network_vector.shp"
+        
+        # Whitebox has a specialized algorithm to trace stream rasters down slope and create polylines
+        print("Tracing raster to vector linestring...")
+        wbt.raster_streams_to_vector(
+            streams=streams_raster,
+            d8_pntr=flow_dir,
+            output=output_shp
+        )
+        
+        print(f"Success! Vector drainage network saved as '{output_shp}'")
+        print("This file contains fully connected drainage polylines, which satisfy the 'GIS-ready' requirement.")
+    
+    if __name__ == "__main__":
+        main()
+
+==================================================
+File: 04_extract_drainage.py
+  Imports count: 2
+  Imports: ['import os', 'from whitebox import WhiteboxTools']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Initializing Hydrology Pipeline for Rajasthan DTM...")
+        wbt = WhiteboxTools()
+        wbt.verbose = True
+        base_dir = os.path.abspath(os.getcwd())
+        wbt.set_working_dir(base_dir)
+        
+        dtm = os.path.join(base_dir, r"Rajasthan_Point_Cloud\rajasthan_dtm.tif")
+        dtm_filled = os.path.join(base_dir, r"Rajasthan_Point_Cloud\rajasthan_dtm_filled.tif")
+        flow_dir = os.path.join(base_dir, r"Rajasthan_Point_Cloud\raj_flow_dir.tif")
+        flow_acc = os.path.join(base_dir, r"Rajasthan_Point_Cloud\raj_flow_acc.tif")
+        streams_raster = os.path.join(base_dir, r"Rajasthan_Point_Cloud\raj_streams.tif")
+        streams_vector = os.path.join(base_dir, r"Rajasthan_Point_Cloud\rajasthan_drainage_network.shp")
+        
+        # 1. Pit Filling (Ensure network stays connected despite ground artifacts)
+        print("Filling DTM depressions...")
+        wbt.fill_depressions(dtm, dtm_filled, fix_flats=True)
+        
+        # 2. Flow Direction
+        print("Computing D8 Flow Direction...")
+        wbt.d8_pointer(dtm_filled, flow_dir)
+        
+        # 3. Flow Accumulation
+        print("Computing D8 Flow Accumulation...")
+        wbt.d8_flow_accumulation(dtm_filled, flow_acc, out_type="cells")
+        
+        # 4. Extract Streams
+        threshold = 500  # Higher threshold because the village is bigger, we only want main drains
+        print(f"Extracting Stream networks with accumulation > {threshold} cells...")
+        wbt.extract_streams(flow_acc, streams_raster, threshold=threshold)
+
+==================================================
+File: 05_visualize_3d.py
+  Imports count: 6
+  Imports: ['import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'import rasterio', 'import geopandas as gpd', 'import numpy as np', 'from rasterio.plot import show']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating 3D Visualization and 2D Drainage Overlay map...")
+        
+        dtm_path = r"Rajasthan_Point_Cloud\rajasthan_dtm.tif"
+        network_path = r"Rajasthan_Point_Cloud\rajasthan_drainage_network.shp"
+        
+        # 1. Load Data
+        with rasterio.open(dtm_path) as src:
+            # Downsample the array by 1/4 to prevent 3D rendering engine crash (takes huge RAM)
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 4), int(src.width / 4)))
+            # Filter NoData values (-32768)
+            dtm_data[dtm_data < -1000] = np.nan
+            transform = src.transform
+            bounds = src.bounds
+            
+            # We need the full resolution reading for the 2nd (2D) plot
+            full_dtm = rasterio.open(dtm_path)
+    
+        drainage_network = gpd.read_file(network_path)
+        
+        # Setup Figure Space
+        fig = plt.figure(figsize=(20, 8))
+        fig.canvas.manager.set_window_title('Rajasthan Village DTM and Drainage Analysis')
+        
+        # --- SUBPLOT 1: The 3D Terrain Surface ---
+        # Downsampled meshgrid for speed and smoothness
+        x = np.linspace(bounds.left, bounds.right, dtm_data.shape[1])
+        y = np.linspace(bounds.bottom, bounds.top, dtm_data.shape[0])
+        X, Y = np.meshgrid(x, y)
+        
+
+==================================================
+File: 06_generate_maps.py
+  Imports count: 9
+  Imports: ['import os', 'import rasterio', 'from rasterio.plot import show', 'import geopandas as gpd', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from matplotlib.colors import LogNorm', 'from matplotlib.colors import LightSource', 'from whitebox import WhiteboxTools']
+  Functions: ['create_wetness_index', 'get_dump_zones', 'main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Presentation-Quality Hydrological Maps...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        # 1. TWI calculation
+        wbt = WhiteboxTools()
+        wbt.set_working_dir(base_dir)
+        twi_path = create_wetness_index(wbt, base_dir)
+        
+        # Datasets
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        flow_acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        flow_dir_path = os.path.join(out_dir, "raj_flow_dir.tif")
+        network_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        
+        drainage_net = gpd.read_file(network_path)
+        
+        print("Saving Figure 1: Flow Accumulation (Log Normal)...")
+        fig, ax = plt.subplots(figsize=(10, 8))
+        with rasterio.open(flow_acc_path) as src:
+            acc = src.read(1)
+            acc[acc <= 0] = 0.1 # Prevent log(0)
+            show(acc, ax=ax, cmap='Blues', norm=LogNorm(vmin=10, vmax=acc.max()), title='Flow Accumulation (High Density Drainage Paths)')
+        plt.savefig(os.path.join(out_dir, "map1_flow_accumulation.png"), dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print("Saving Figure 2: Categorical Flow Direction...")
+        fig, ax = plt.subplots(figsize=(10, 8))
+        with rasterio.open(flow_dir_path) as src:
+
+==================================================
+File: 07_generate_3d_gif.py
+  Imports count: 7
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from matplotlib.colors import LightSource', 'from matplotlib.animation import FuncAnimation, PillowWriter']
+  Functions: ['main', 'update']
+  Main/Entry code preview:
+    def main():
+        print("Initializing 3D GIF Generation...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        gif_path = os.path.join(out_dir, "rajasthan_3d_rotation.gif")
+        
+        # Setup the Plot Figure
+        fig = plt.figure(figsize=(10, 8), facecolor='white')
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_axis_off() # clean look
+        
+        # Load and downsample DTM (using / 4 for high-detail clear GIF)
+        print("Loading high-detail Terrain Data for Animation...")
+        with rasterio.open(dtm_path) as src:
+            # Reduced downsampling from /12 to /4 for 9x more detail
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 4), int(src.width / 4)))
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        x = np.linspace(bounds.left, bounds.right, dtm_data.shape[1])
+        y = np.linspace(bounds.bottom, bounds.top, dtm_data.shape[0])
+        X, Y = np.meshgrid(x, y)
+        
+        print("Building high-detail initial 3D Hillshade Mesh...")
+        # Add a LightSource sun
+        ls = LightSource(azdeg=315, altdeg=45)
+        # Applying 3.0 vertical exaggeration for maximum visibility of drainage relief
+        rgb = ls.shade(np.flipud(dtm_data), cmap=plt.cm.terrain, vert_exag=3.0, blend_mode='overlay')
+
+==================================================
+File: 08_visualize_flow_arrows.py
+  Imports count: 5
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from rasterio.plot import show']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Rendering Beautiful Quiver Flow Direction Map...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        flow_dir_path = os.path.join(out_dir, "raj_flow_dir.tif")
+        
+        # 1. Setup the figure
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # 2. Plot underlying Terrain DTM
+        dtm = rasterio.open(dtm_path)
+        show(dtm, ax=ax, cmap='terrain', alpha=0.5, title="Topological Flow Routing (Where water travels from -> to)")
+        
+        # 3. Process Flow Direction Raster into vector components
+        with rasterio.open(flow_dir_path) as src:
+            fdir = src.read(1)
+            bounds = src.bounds
+            transform = src.transform
+            
+        # Mask invalid data
+        valid_mask = fdir > 0
+        # Downsample drastically (step every 30 pixels) to prevent a massive block of black overlapping arrows
+        step = 30
+        
+        # D8 Direction value mappings to unit vectors [DX, DY]
+        d8_to_dx = {1:1, 2:1, 4:0, 8:-1, 16:-1, 32:-1, 64:0, 128:1}
+        d8_to_dy = {1:0, 2:-1, 4:-1, 8:-1, 16:0, 32:1, 64:1, 128:1}
+        
+
+==================================================
+File: 09_generate_enhanced_flood_map.py
+  Imports count: 6
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from matplotlib.colors import ListedColormap', 'import geopandas as gpd']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Enhanced Flood Risk Map...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        twi_path = os.path.join(out_dir, "raj_twi_flood_risk.tif")
+        network_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+    
+        # Load TWI data
+        with rasterio.open(twi_path) as src:
+            twi = src.read(1)
+            # Mask nodata
+            twi = np.ma.masked_less(twi, -100)
+            transform = src.transform
+    
+        # Define Risk Categories based on TWI percentiles
+        # Usually, high TWI means high flood risk
+        valid_twi = twi.compressed()
+        p80 = np.percentile(valid_twi, 80)
+        p95 = np.percentile(valid_twi, 95)
+    
+        risk_map = np.zeros_like(twi)
+        risk_map[twi < p80] = 1   # Low Risk
+        risk_map[twi >= p80] = 2  # Medium Risk
+        risk_map[twi >= p95] = 3  # High Risk
+        risk_map = np.ma.masked_array(risk_map, twi.mask)
+    
+        # Load Drainage Network
+        drainage = gpd.read_file(network_path)
+
+==================================================
+File: 10_detail_flow_accumulation.py
+  Imports count: 6
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from matplotlib.colors import LogNorm', 'from rasterio.plot import show']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Detailed Flow Accumulation Insight Map...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        flow_acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+    
+        # Load data
+        with rasterio.open(flow_acc_path) as src:
+            acc = src.read(1)
+            # Handle nodata/zero for log plot
+            acc[acc <= 0] = 0.1
+            transform = src.transform
+            bounds = src.bounds
+    
+        # Plot
+        fig, ax = plt.subplots(figsize=(14, 10))
+        
+        # Base DTM for context (faint)
+        with rasterio.open(dtm_path) as dtm_src:
+            show(dtm_src, ax=ax, cmap='Greys', alpha=0.3)
+    
+        # Detailed Flow Accumulation with Log scale for better visibility of small streams
+        # Darker blue = higher accumulation
+        img = ax.imshow(acc, cmap='Blues', norm=LogNorm(vmin=10, vmax=acc.max()), 
+                       extent=(bounds.left, bounds.right, bounds.bottom, bounds.top), alpha=0.8)
+        
+        # Annotate high-accumulation zones
+        # Find the single highest accumulation point for an example label
+
+==================================================
+File: 11_final_hackathon_infographic.py
+  Imports count: 7
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from matplotlib.colors import LogNorm, ListedColormap, LightSource', 'import geopandas as gpd', 'from rasterio.plot import show']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Final Hackathon Presentation Infographic...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        # Paths
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        flow_acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        flow_dir_path = os.path.join(out_dir, "raj_flow_dir.tif")
+        twi_path = os.path.join(out_dir, "raj_twi_flood_risk.tif")
+        network_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+    
+        # Load Vector Network
+        drainage = gpd.read_file(network_path)
+    
+        # 1. Setup Large Figure (Infographic Style)
+        fig = plt.figure(figsize=(24, 16), facecolor='#f8f9fa')
+        plt.suptitle("Rajasthan Village: AI-Driven Drainage & Flood Risk Analysis Dashboard", 
+                     fontsize=32, fontweight='bold', y=0.95, color='#2c3e50')
+        
+        # Grid Layout: 2 Rows, 2 Columns
+        gs = fig.add_gridspec(2, 2, hspace=0.2, wspace=0.15)
+    
+        # --- PANEL A: Realistic 3D Terrain Model (Top Left) ---
+        print("Rendering Panel A: 3D Terrain...")
+        ax_a = fig.add_subplot(gs[0, 0], projection='3d')
+        with rasterio.open(dtm_path) as src:
+            # Increase detail for the master infographic by using / 4 downsampling
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 4), int(src.width / 4)))
+            bounds = src.bounds
+
+==================================================
+File: 12_ultra_res_3d_render.py
+  Imports count: 6
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from matplotlib.colors import LightSource']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Ultra-Resolution 3D Relief Visualization (600 DPI)...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        output_png = os.path.join(out_dir, "ULTRA_HD_3D_TERRAIN.png")
+        
+        # 1. Load the High-Detail DTM
+        print("Loading high-detail terrain model...")
+        with rasterio.open(dtm_path) as src:
+            # No downsampling (or very minimal if grid is too massive)
+            # 1.0m resolution is usually manageable for direct DTM plotting
+            dtm_data = src.read(1)
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        print(f"Data size: {dtm_data.shape[0]}x{dtm_data.shape[1]} pixels.")
+        
+        x = np.linspace(bounds.left, bounds.right, dtm_data.shape[1])
+        y = np.linspace(bounds.bottom, bounds.top, dtm_data.shape[0])
+        X, Y = np.meshgrid(x, y)
+        
+        # Setup Figure HQ
+        fig = plt.figure(figsize=(20, 16), facecolor='white')
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Hide axis but keep a nice "physical" border feel
+        ax.set_axis_off()
+        
+
+==================================================
+File: 13_ground_level_3d_view.py
+  Imports count: 6
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from matplotlib.colors import LightSource']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Ground-Level Perspective 3D Render...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        output_png = os.path.join(out_dir, "GROUND_LEVEL_3D_VIEW.png")
+        
+        # 1. Load the High-Detail DTM
+        with rasterio.open(dtm_path) as src:
+            # Use high detail for ground level
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 2), int(src.width / 2)))
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        x = np.linspace(bounds.left, bounds.right, dtm_data.shape[1])
+        y = np.linspace(bounds.bottom, bounds.top, dtm_data.shape[0])
+        X, Y = np.meshgrid(x, y)
+        
+        # Setup Figure HQ
+        fig = plt.figure(figsize=(18, 10), facecolor='white')
+        ax = fig.add_subplot(111, projection='3d')
+        ax.set_axis_off()
+        
+        # 2. Enhanced Realistic Relief Shading
+        ls = LightSource(azdeg=315, altdeg=45)
+        # High vertical exaggeration to make the "ground level" feel more dramatic
+        rgb = ls.shade(np.flipud(dtm_data), cmap=plt.cm.terrain, vert_exag=3.0, blend_mode='overlay')
+        
+        # 3. Low-Angle Rendering
+
+==================================================
+File: 14_integrated_3d_dashboard.py
+  Imports count: 8
+  Imports: ['import os', 'import laspy', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'import geopandas as gpd', 'import rasterio', 'from scipy.interpolate import interp2d']
+  Functions: ['main', 'get_z_height']
+  Main/Entry code preview:
+    def main():
+        print("Generating Integrated 3D Point Cloud & Drainage Dashboard...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        las_path = os.path.join(out_dir, "67169_5NKR_CHAKHIRASINGH_ml_classified.las")
+        shp_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        flow_acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        
+        # 1. Load and Sample Point Cloud
+        print("Loading Classified Point Cloud...")
+        las = laspy.read(las_path)
+        
+        # Stratified sample: 80% ground, 20% non-ground for context
+        ground_idx = np.where(las.classification == 2)[0]
+        other_idx = np.where(las.classification != 2)[0]
+        
+        n_points = 150000 
+        s_ground = np.random.choice(ground_idx, int(n_points * 0.8), replace=False)
+        s_other = np.random.choice(other_idx, int(n_points * 0.2), replace=False)
+        idx = np.concatenate([s_ground, s_other])
+        
+        px, py, pz = las.x[idx], las.y[idx], las.z[idx]
+        p_classification = las.classification[idx]
+        
+        # 2. Load Drainage Vector & DTM for Z-lifting
+        print("Lifting 2D Drainage Network into 3D...")
+        drainage = gpd.read_file(shp_path)
+        with rasterio.open(dtm_path) as src:
+
+==================================================
+File: 15_3d_ground_vs_nonground.py
+  Imports count: 5
+  Imports: ['import os', 'import laspy', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Separate 3D Ground vs Non-Ground Visualization...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        las_path = os.path.join(out_dir, "67169_5NKR_CHAKHIRASINGH_ml_classified.las")
+        output_png = os.path.join(out_dir, "3D_GROUND_VS_NONGROUND.png")
+        
+        # 1. Load and Sample Point Cloud
+        print("Loading Classified Point Cloud...")
+        las = laspy.read(las_path)
+        
+        # Stratified sample: 50% ground, 50% non-ground for balanced separate view
+        ground_idx = np.where(las.classification == 2)[0]
+        other_idx = np.where(las.classification != 2)[0]
+        
+        # Use enough points to show the structure clearly without crashing
+        n_sample = 150000 
+        s_ground = np.random.choice(ground_idx, min(len(ground_idx), n_sample), replace=False)
+        s_other = np.random.choice(other_idx, min(len(other_idx), n_sample), replace=False)
+        
+        # 2. Setup 3D Plot with Dark Theme
+        print("Rendering 3D Classification View...")
+        fig = plt.figure(figsize=(20, 14), facecolor='black')
+        ax = fig.add_subplot(111, projection='3d', facecolor='black')
+        
+        # Global Vertical Exaggeration
+        z_exag = 2.0
+        
+        # Layer 1: Ground Points (Earthy Brown)
+
+==================================================
+File: 16_generate_classification_3d_gif.py
+  Imports count: 6
+  Imports: ['import os', 'import laspy', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from matplotlib.animation import FuncAnimation, PillowWriter']
+  Functions: ['main', 'update']
+  Main/Entry code preview:
+    def main():
+        print("Initializing 3D Classification GIF Generation...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        las_path = os.path.join(out_dir, "67169_5NKR_CHAKHIRASINGH_ml_classified.las")
+        gif_path = os.path.join(out_dir, "rajasthan_classification_3d_rotation.gif")
+        
+        # Setup the Plot Figure
+        fig = plt.figure(figsize=(10, 8), facecolor='black')
+        ax = fig.add_subplot(111, projection='3d', facecolor='black')
+        ax.set_axis_off() 
+        
+        # 1. Load and Sample Point Cloud
+        print("Loading and Sampling Point Cloud...")
+        las = laspy.read(las_path)
+        
+        # Balanced sampling for the GIF
+        ground_idx = np.where(las.classification == 2)[0]
+        other_idx = np.where(las.classification != 2)[0]
+        
+        n_sample = 80000 # Keeping it manageable for GIF performance
+        s_ground = np.random.choice(ground_idx, min(len(ground_idx), n_sample), replace=False)
+        s_other = np.random.choice(other_idx, min(len(other_idx), n_sample), replace=False)
+        
+        z_exag = 2.0
+        
+        print("Plotting initial classification layers...")
+        # Layer 1: Ground Points
+        gx, gy, gz = las.x[s_ground], las.y[s_ground], las.z[s_ground]
+
+==================================================
+File: 17_advanced_3d_drainage_model.py
+  Imports count: 8
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from mpl_toolkits.mplot3d.art3d import Poly3DCollection', 'import geopandas as gpd', 'from matplotlib.colors import LightSource']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Advanced 3D Drainage Output Model (Slab Edition)...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        shp_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        output_png = os.path.join(out_dir, "ADVANCED_3D_DRAINAGE_SLAB_MODEL.png")
+        
+        # 1. Load Data
+        print("Loading Terrain and Flow Data...")
+        with rasterio.open(dtm_path) as src:
+            # Use a balanced resolution for the 3D mesh + labels
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 3), int(src.width / 3)))
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        drainage = gpd.read_file(shp_path)
+        
+        with rasterio.open(acc_path) as a_src:
+            acc = a_src.read(1)
+            # Identify Top 60 Hotspots for dense labeling
+            valid_acc = np.ma.masked_invalid(acc)
+            flat_idx = np.argsort(valid_acc.compressed())[-60:]
+            fy, fx = np.where(valid_acc.mask == False)
+            hotspots = []
+            for idx in flat_idx:
+                r, c = fy[idx], fx[idx]
+                hx, hy = a_src.transform * (c, r)
+
+==================================================
+File: 18_generate_advanced_slab_rotation.py
+  Imports count: 9
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import matplotlib.pyplot as plt', 'from mpl_toolkits.mplot3d import Axes3D', 'from mpl_toolkits.mplot3d.art3d import Poly3DCollection', 'import geopandas as gpd', 'from matplotlib.colors import LightSource', 'from matplotlib.animation import FuncAnimation, PillowWriter']
+  Functions: ['main', 'update']
+  Main/Entry code preview:
+    def main():
+        print("Initializing Multi-Angle Orbital Animation for Slab Model...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        shp_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        gif_path = os.path.join(out_dir, "rajasthan_slab_orbital_animation.gif")
+        
+        # 1. Load Data
+        print("Loading Terrain Data...")
+        with rasterio.open(dtm_path) as src:
+            # Balanced resolution for smooth GIF rendering
+            dtm_data = src.read(1, out_shape=(1, int(src.height / 4), int(src.width / 4)))
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        drainage = gpd.read_file(shp_path)
+        
+        # Identify Top 40 Hotspots
+        with rasterio.open(acc_path) as a_src:
+            acc = a_src.read(1)
+            valid_acc = np.ma.masked_invalid(acc)
+            flat_idx = np.argsort(valid_acc.compressed())[-40:]
+            fy, fx = np.where(valid_acc.mask == False)
+            hotspots = []
+            for idx in flat_idx:
+                r, c = fy[idx], fx[idx]
+                hx, hy = a_src.transform * (c, r)
+
+==================================================
+File: 19_interactive_3d_world.py
+  Imports count: 5
+  Imports: ['import os', 'import rasterio', 'import numpy as np', 'import plotly.graph_objects as go', 'import geopandas as gpd']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("Generating Interactive 3D World (Plotly Edition)...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        
+        dtm_path = os.path.join(out_dir, "rajasthan_dtm.tif")
+        shp_path = os.path.join(out_dir, "rajasthan_drainage_network.shp")
+        acc_path = os.path.join(out_dir, "raj_flow_acc.tif")
+        output_html = os.path.join(out_dir, "rajasthan_3d_world.html")
+        
+        # Check existence
+        if not os.path.exists(dtm_path):
+            print(f"ERROR: DTM file not found at {dtm_path}")
+            return
+    
+        # 1. Load Terrain Data (Optimized for Browser)
+        print("Loading Terrain Surface...")
+        with rasterio.open(dtm_path) as src:
+            # 400x400 is very safe for smooth browser interaction
+            dtm_data = src.read(1, out_shape=(1, 400, 400))
+            bounds = src.bounds
+            dtm_data[dtm_data < -1000] = np.nan
+            
+        x = np.linspace(bounds.left, bounds.right, dtm_data.shape[1])
+        y = np.linspace(bounds.bottom, bounds.top, dtm_data.shape[0])
+        
+        z_exag = 3.0
+        
+        # 2. Extract 3D Drainage Network
+        print("Extracting 3D Drainage Lines...")
+
+==================================================
+File: 20_refined_classification.py
+  Imports count: 6
+  Imports: ['import laspy', 'import numpy as np', 'import os', 'from scipy.spatial import cKDTree', 'from sklearn.cluster import DBSCAN', 'import time']
+  Functions: ['extract_refined_features', 'main']
+  Main/Entry code preview:
+    def main():
+        print("🚀 Initializing Refined LiDAR Classification (Ground, Trees, Houses)...")
+        
+        input_las_path = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_ml_classified.las"
+        output_las_path = r"Rajasthan_Point_Cloud\67169_5NKR_CHAKHIRASINGH_refined.las"
+        
+        if not os.path.exists(input_las_path):
+            print(f"❌ Error: {input_las_path} not found.")
+            return
+    
+        las = laspy.read(input_las_path)
+        coords = np.vstack((las.x, las.y, las.z)).transpose()
+        z_vals = las.z
+        total_points = len(coords)
+        
+        print(f"📊 Loaded {total_points:,} points.")
+        
+        # 1. Build KDTree for spatial analysis
+        print("🔍 Building spatial index...")
+        tree = cKDTree(coords[::10]) # Use a decimated tree for speed if needed, but let's try full if memory allows
+        # Actually, for 9.6M points, a full tree might be heavy. Let's use decimated tree for feature extraction of a sample if we just want stats, 
+        # OR process in batches.
+        
+        # Let's process in batches to refine the classification
+        print("🛠️ Refining classifications in batches...")
+        batch_size = 500000
+        refined_classes = np.copy(las.classification)
+        
+        # Re-build tree on full coords for accurate local min
+        full_tree = cKDTree(coords)
+
+==================================================
+File: 21_statistics_dashboard.py
+  Imports count: 4
+  Imports: ['import os', 'import plotly.graph_objects as go', 'import plotly.express as px', 'from plotly.subplots import make_subplots']
+  Functions: ['main']
+  Main/Entry code preview:
+    def main():
+        print("🎨 Generating Premium Statistics Dashboard...")
+        base_dir = os.path.abspath(os.getcwd())
+        out_dir = os.path.join(base_dir, "Rajasthan_Point_Cloud")
+        stats_path = os.path.join(out_dir, "classification_stats.txt")
+        output_html = os.path.join(out_dir, "rajasthan_statistics.html")
+        
+        # Check if stats exist, if not, wait or use defaults for template
+        if not os.path.exists(stats_path):
+            print(f"⚠️ Warning: {stats_path} not found. Using sample data for layout...")
+            stats = {
+                "ground_points": 6743680,
+                "building_points": 450000,
+                "tree_points": 1200000,
+                "unclassified_points": 1200000,
+                "estimated_houses": 420,
+                "estimated_trees": 1540,
+                "total_points": 9600000
+            }
+        else:
+            stats = {}
+            with open(stats_path, "r") as f:
+                for line in f:
+                    k, v = line.strip().split(":")
+                    stats[k] = int(v)
+    
+        # 1. Create Charts
+        # Pie Chart
+        labels = ['Ground', 'Vegetation', 'Buildings', 'Other']
+        values = [stats['ground_points'], stats['tree_points'], stats['building_points'], stats['unclassified_points']]

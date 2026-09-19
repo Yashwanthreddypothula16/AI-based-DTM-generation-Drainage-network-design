@@ -1,5 +1,3 @@
-
-
 import laspy
 import numpy as np
 from scipy.interpolate import griddata
@@ -10,7 +8,9 @@ from rasterio.transform import from_origin
 # STEP 1: Load LAS file
 # -------------------------------
 
-las_file = "Punjab_Point_Cloud/Dhal_Hoshiarpur_31235.las"   # <<< CHANGE to your LAS filename
+las_file = (
+    "Punjab_Point_Cloud/Dhal_Hoshiarpur_31235.las"  # <<< CHANGE to your LAS filename
+)
 las = laspy.read(las_file)
 
 print("Total points:", len(las.x))
@@ -20,7 +20,7 @@ print("Unique classes in LAS file:", np.unique(las.classification))
 # STEP 2: Estimate Ground Points
 # -------------------------------
 # Since your file is class 0 only, we estimate ground
-threshold = np.percentile(las.z, 10)   # lowest 10% as ground
+threshold = np.percentile(las.z, 10)  # lowest 10% as ground
 
 ground_mask = las.z <= threshold
 
@@ -57,7 +57,7 @@ xi, yi = np.meshgrid(xi, yi)
 
 print("Interpolating... (this may take time)")
 
-zi = griddata((x, y), z, (xi, yi), method='linear')
+zi = griddata((x, y), z, (xi, yi), method="linear")
 
 # Fill empty values
 zi[np.isnan(zi)] = np.nanmean(zi)
@@ -76,7 +76,7 @@ with rasterio.open(
     width=zi.shape[1],
     count=1,
     dtype=zi.dtype,
-    crs="EPSG:4326",   # Change if needed
+    crs="EPSG:4326",  # Change if needed
     transform=transform,
 ) as dst:
     dst.write(zi, 1)

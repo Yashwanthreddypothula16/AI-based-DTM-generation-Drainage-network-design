@@ -29,7 +29,7 @@ flow_acc = np.zeros_like(dtm)
 
 for i in range(1, dtm.shape[0] - 1):
     for j in range(1, dtm.shape[1] - 1):
-        neighbors = dtm[i-1:i+2, j-1:j+2]
+        neighbors = dtm[i - 1 : i + 2, j - 1 : j + 2]
         flow_acc[i, j] = np.sum(neighbors > dtm[i, j])
 
 print("Flow accumulation estimated")

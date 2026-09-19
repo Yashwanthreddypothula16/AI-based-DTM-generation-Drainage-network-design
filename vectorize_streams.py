@@ -29,11 +29,7 @@ print("Vector features found:", len(geoms))
 # -------------------------------
 # STEP 3: Create GeoDataFrame
 # -------------------------------
-gdf = gpd.GeoDataFrame(
-    {"value": values},
-    geometry=geoms,
-    crs=crs
-)
+gdf = gpd.GeoDataFrame({"value": values}, geometry=geoms, crs=crs)
 
 # -------------------------------
 # STEP 4: Save as Shapefile

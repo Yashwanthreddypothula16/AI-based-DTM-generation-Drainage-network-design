@@ -1,0 +1,7 @@
+ground_points:1558416
+building_points:143306
+tree_points:39197
+unclassified_points:208729
+estimated_houses:716
+estimated_trees:700
+total_points:1949648

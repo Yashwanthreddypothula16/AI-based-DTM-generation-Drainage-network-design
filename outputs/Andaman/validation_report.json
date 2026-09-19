@@ -1,0 +1,26 @@
+{
+    "state_key": "andaman",
+    "timestamp": "2026-06-10T10:16:11Z",
+    "original_raw_point_count": 287661850,
+    "processed_subset_point_count": 1953726,
+    "ml_ground_point_count": 382976,
+    "terrain_x_cells": 3723,
+    "terrain_y_cells": 2848,
+    "drainage_channels_count": 5674,
+    "stages_status": {
+        "noise_cleaning": "SUCCESS",
+        "ml_classification": "SUCCESS",
+        "dtm_generation": "SUCCESS",
+        "hydrology_wbt": "SUCCESS",
+        "vector_extraction": "SUCCESS",
+        "visualizations_2d": "SUCCESS",
+        "webgl_3d": "SUCCESS",
+        "telemetry_stats": "SUCCESS"
+    },
+    "standards_comparison": {
+        "dtm_resolution_m": 1.0,
+        "crs": "EPSG:32619",
+        "output_format": "GTiff/Shapefile",
+        "matches_golden_reference": true
+    }
+}
